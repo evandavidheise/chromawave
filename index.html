@@ -74,7 +74,16 @@ footer{margin-top:28px;color:var(--mut);font-size:13px;text-align:center}
 <select id="scale"><option value="source">Same size as original</option><option value="480">480p</option><option value="720">720p (HD)</option><option value="1080">1080p (Full HD)</option><option value="1440">1440p</option><option value="2160">4K</option><option value="3240" selected>6K</option><option value="4320">8K</option></select>
 <p class="help">Bigger sizes look sharper but take longer. Your video keeps its original smoothness.</p></div></section>
 <section class="card" id="apanel"><h2><span class="n">4</span>Sound</h2>
-<div class="seg" id="seg-amode"><button type="button" data-v="off">Off</button><button type="button" data-v="transparent">Natural</button><button type="button" data-v="heavy" class="on">Boosted</button></div><p class="help" id="ahelp"></p></section>
+<div class="field"><div class="seg" id="seg-amode"><button type="button" data-v="off">Off</button><button type="button" data-v="transparent">Natural</button><button type="button" data-v="heavy" class="on">Boosted</button></div><p class="help" id="ahelp"></p></div>
+<div class="field hide" id="audioexport" role="group" aria-label="WAV export settings" aria-describedby="audioexporthelp">
+<div class="row">
+<div><label class="lbl" for="exportRate">Export sample rate</label>
+<select id="exportRate"><option value="44100">44.1 kHz</option><option value="48000">48 kHz</option><option value="88200">88.2 kHz</option><option value="96000">96 kHz</option><option value="176400">176.4 kHz</option><option value="192000" selected>192 kHz</option></select></div>
+<div><label class="lbl" for="exportBits">Export bit depth</label>
+<select id="exportBits"><option value="16">16-bit PCM</option><option value="24">24-bit PCM</option><option value="32" selected>32-bit float</option></select></div>
+</div>
+<p class="help" id="audioexporthelp">Audio is processed at 192 kHz, 32-bit float. These settings apply only to the downloaded WAV.</p>
+</div></section>
 <section class="card"><h2><span class="n" id="gon">5</span>Start</h2>
 <div class="actions"><button class="main" id="go" disabled>Start</button><button class="ghost" id="stop" disabled>Cancel</button><span id="stat">Choose a file to begin.</span></div>
 <div id="bar"><div id="fill"></div></div><div id="res"></div>
@@ -172,7 +181,7 @@ function setSeg(id,v){document.querySelectorAll('#'+id+' button').forEach(b=>b.c
 function applyAmode(){
  $('aenh').checked=amode!=='off';
  $('apreprof').checked=$('aprepan').checked=amode==='heavy';
- setSeg('seg-amode',amode);$('ahelp').textContent=MODE_HELP[amode]}
+ setSeg('seg-amode',amode);$('ahelp').textContent=amode==='off'&&audioOnlyNow()?'Exports the sound without enhancement.':MODE_HELP[amode]}
 function applyFps(){
  const keep=fpsMode==='keep';
  $('sourcefps').checked=keep;$('reuse').value=keep?'-9':'0';$('mode').value='ai';
@@ -183,6 +192,8 @@ function refresh(){
  if(isA&&amode==='off'){amode='heavy'}
  applyAmode();applyFps();
  $('apanel').classList.toggle('hide',isI);
+ $('audioexport').classList.toggle('hide',!ao);
+ $('exportRate').disabled=$('exportBits').disabled=busy;
  $('ocard').classList.toggle('hide',isA||isI);
  $('vcard').classList.toggle('hide',isA||(!isI&&ao));
  $('fpsrow').closest('.field').classList.toggle('hide',isI);
@@ -899,10 +910,10 @@ function parseWav(ab){
   out[c][i]=x;p+=bps}
  return {channels:out,sampleRate:sr}}
 function makeWav(chs,sr,bits){
- const nc=chs.length,n=chs[0].length,bps=bits/8,dataLen=n*nc*bps;
- if(44+dataLen>4294967295)throw Error('Result is too large for a WAV file (4 GB limit).');
- const buf=new ArrayBuffer(44+dataLen),v=new DataView(buf),ws=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
- ws(0,'RIFF');v.setUint32(4,36+dataLen,true);ws(8,'WAVE');ws(12,'fmt ');v.setUint32(16,16,true);
+ const nc=chs.length,n=chs[0].length,bps=bits/8,dataLen=n*nc*bps,paddedLen=dataLen+(dataLen%2);
+ if(44+paddedLen>4294967295)throw Error('Result is too large for a WAV file (4 GB limit).');
+ const buf=new ArrayBuffer(44+paddedLen),v=new DataView(buf),ws=(o,s)=>{for(let i=0;i<s.length;i++)v.setUint8(o+i,s.charCodeAt(i))};
+ ws(0,'RIFF');v.setUint32(4,36+paddedLen,true);ws(8,'WAVE');ws(12,'fmt ');v.setUint32(16,16,true);
  v.setUint16(20,bits===32?3:1,true);v.setUint16(22,nc,true);v.setUint32(24,sr,true);
  v.setUint32(28,sr*nc*bps,true);v.setUint16(32,nc*bps,true);v.setUint16(34,bits,true);ws(36,'data');v.setUint32(40,dataLen,true);
  let o=44;
@@ -912,31 +923,19 @@ function makeWav(chs,sr,bits){
    if(bits===16){v.setInt16(o,Math.round(s*32767),true);o+=2}
    else{const q=Math.round(s*8388607);v.setUint8(o,q&255);v.setUint8(o+1,(q>>8)&255);v.setUint8(o+2,(q>>16)&255);o+=3}}}
  return buf}
-function wavFmt(buf){const u=new Uint8Array(buf),dv=new DataView(buf),tg=q=>String.fromCharCode(u[q],u[q+1],u[q+2],u[q+3]);
- if(buf.byteLength<12||tg(0)!=='RIFF'||tg(8)!=='WAVE')return null;
- let q=12;while(q+8<=buf.byteLength){const id=tg(q),len=dv.getUint32(q+4,true);
-  if(id==='fmt ')return {format:dv.getUint16(q+8,true),rate:dv.getUint32(q+12,true),bits:dv.getUint16(q+22,true)};
-  q+=8+len+(len&1)}
- return null}
-/* Audio-only output must use the selected sample rate and bit depth (32-bit = float). */
-function conformWav(buf,SR,BD){
- const f=wavFmt(buf);if(!f)throw Error('Cannot read WAV header');
- const wantFmt=BD===32?3:1;
- if(f.rate===SR&&f.bits===BD&&f.format===wantFmt)return buf;
- const w=parseWav(buf);if(!w)throw Error('Cannot read WAV samples');
- let ch=w.channels;
- if(w.sampleRate!==SR){log(`Converting ${w.sampleRate} Hz to ${SR} Hz...`);ch=enhResample(ch,w.sampleRate,SR)}
- if(f.bits!==BD)log(`Converting ${f.bits}-bit to ${BD}-bit.`);
- return makeWav(ch,SR,BD)}
 async function sha256(buf){try{return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',buf))).map(b=>b.toString(16).padStart(2,'0')).join('')}catch{return null}}
 
-async function decodeWithContext(f){
- const AC=window.AudioContext||window.webkitAudioContext;if(!AC)throw Error('This browser has no audio decoder.');const ctx=new AC();
+async function decodeWithContext(f,targetRate=0){
+ const Offline=window.OfflineAudioContext||window.webkitOfflineAudioContext;
+ const AC=window.AudioContext||window.webkitAudioContext;
+ let ctx;
+ if(targetRate&&Offline){try{ctx=new Offline(1,1,targetRate)}catch{}}
+ if(!ctx){if(!AC)throw Error('This browser has no audio decoder.');ctx=new AC()}
  try{const buf=await ctx.decodeAudioData(await f.arrayBuffer());
   const ch=[];for(let c=0;c<buf.numberOfChannels;c++)ch.push(buf.getChannelData(c).slice());
   return {channels:ch,sampleRate:buf.sampleRate}}
  catch(e){throw Error('Could not decode audio from this file (does it have an audio track?)')}
- finally{ctx.close().catch(()=>{})}}
+ finally{if(ctx.close)ctx.close().catch(()=>{})}}
 
 
 function mediaToMovieSeconds(mp,at,mediaSeconds){
@@ -1040,7 +1039,7 @@ async function decodeMp4Audio(mp,at,a){
  }
  return {channels:out,sampleRate:rate,startUs}}
 
-async function loadAudio(f){
+async function loadAudio(f,targetRate=0){
  if(WAV_EXT.test(f.name)||/^audio\/(x-)?wav(e)?$/.test(f.type)){
   try{const w=parseWav(await f.arrayBuffer());if(w){log(`Read WAV directly: ${w.channels.length} ch, ${w.sampleRate} Hz`);return w}}
   catch(e){log('WAV reader: '+(e.message||e)+' - using the browser decoder instead.')}}
@@ -1050,7 +1049,7 @@ async function loadAudio(f){
    if(!at)throw Error('no audio track');
    const r=await decodeMp4Audio(mp,at,a);log(`Decoded the video's audio track: ${r.channels.length} ch, ${r.sampleRate} Hz`);return r}
   catch(e){if(e&&e.message==='cancelled')throw e;log('Direct MP4 audio decode failed ('+(e.message||e)+'); trying the browser decoder.')}}
- const r=await decodeWithContext(f);log(`Decoded with the browser: ${r.channels.length} ch, ${r.sampleRate} Hz`);return r}
+ const r=await decodeWithContext(f,targetRate);log(`Decoded with the browser: ${r.channels.length} ch, ${r.sampleRate} Hz`);return r}
 
 /* ---- audio for the video export ---- */
 async function pickAudioEnc(nch,rate){
@@ -1128,38 +1127,71 @@ function passthroughAudio(mp,at,a,base,vt=null){
    meta:i===0?{decoderConfig:{codec:'mp4a.40.2',numberOfChannels:nc,sampleRate:sr,description:adesc}}:undefined}))}}
 
 
-/* ---- audio-only run (audio files, or "Enhanced audio only" for a video) ---- */
+/* Band-limited conversion for audio-only WAVs. Fractional phases interpolate
+   between input samples; the lower Nyquist limit sets the anti-alias filter. */
+async function resampleAudioOnly(channels,inRate,outRate){
+ if(inRate===outRate)return channels;
+ const n=channels[0].length,length=Math.max(1,Math.round(n*outRate/inRate));
+ const half=64,phases=1024,step=inRate/outRate,cutoff=Math.min(1,outRate/inRate)*0.94;
+ const kernels=Array.from({length:phases+1},(_,p)=>{
+  const weights=new Float64Array(2*half);let total=0;
+  for(let t=0;t<weights.length;t++){
+   const x=t-half+1-p/phases,angle=Math.PI*x/half;
+   const sinc=x===0?cutoff:Math.sin(Math.PI*cutoff*x)/(Math.PI*x);
+   weights[t]=sinc*(0.42+0.5*Math.cos(angle)+0.08*Math.cos(2*angle));total+=weights[t]}
+  for(let t=0;t<weights.length;t++)weights[t]/=total;
+  return weights});
+ const output=channels.map(()=>new Float32Array(length)),block=32768;
+ for(let start=0;start<length;start+=block){
+  if(cancel)throw Error('cancelled');
+  for(let i=start;i<Math.min(length,start+block);i++){
+   const position=i*step,center=Math.floor(position),first=center-half+1;
+   const weights=kernels[Math.round((position-center)*phases)];
+   for(let c=0;c<channels.length;c++){
+    const src=channels[c];let value=0;
+    if(first>=0&&first+weights.length<=n){
+     for(let t=0;t<weights.length;t++)value+=src[first+t]*weights[t];
+    }else{
+     for(let t=0;t<weights.length;t++)value+=src[Math.min(n-1,Math.max(0,first+t))]*weights[t];
+    }
+    output[c][i]=value;
+   }}
+  if(start+block<length)await sleep(0);
+ }
+ return output;
+}
+
+/* ---- audio-only run (audio files, or "Audio only" for a video) ---- */
 async function runAudio(){
  busy=true;cancel=false;$('go').disabled=true;$('stop').disabled=false;$('res').innerHTML='';$('log').textContent='';$('fill').style.width='0%';
- const {SR,BD,PASS,AM}=aset();
+ $('exportRate').disabled=$('exportBits').disabled=true;
+ const input=file,rateOut=+$('exportRate').value,outBits=+$('exportBits').value;
+ const processRate=192000,processBits=32,{AM}=aset(),improve=$('aenh').checked;
  stat('Reading audio...');
  const t0=performance.now();
- let wavIn=null,inInfo='';
- if(WAV_EXT.test(file.name)||/^audio\/(x-)?wav(e)?$/.test(file.type)){
-  /* Preserve the original WAV as the alignment reference. */
-  wavIn=await file.arrayBuffer();inInfo='WAV file';
-  try{stat('Matching selected sample rate and bit depth...');wavIn=conformWav(wavIn,SR,BD)}catch(e){log('WAV match: '+(e.message||e)+' - will convert after decoding.');wavIn=null}}
- let src=null,outBits=BD;
- if(!wavIn){
-  src=await loadAudio(file);
-  if(cancel)throw Error('cancelled');
-  if(!src.channels[0].length)throw Error('The audio is empty.');
-  log(`Audio: ${src.channels.length} ch, ${src.sampleRate} Hz, ${(src.channels[0].length/src.sampleRate).toFixed(1)} s`);
-  wavIn=makeWav(src.channels,src.sampleRate,BD);inInfo='decoded to WAV'}
- stat('Matching selected sample rate and bit depth...');wavIn=conformWav(wavIn,SR,BD);
- log(`Audio mode: ${amode}, input ${inInfo}.`);
- let wav;
- try{wav=$('aenh').checked?await enhanceWav(wavIn,AM):wavIn}
- catch(e){
-  if(e&&e.message==='cancelled')throw e;
-  if(src)throw e;
-  log('Could not read this WAV directly ('+(e.message||e)+'); converting it first.');
-  src=await loadAudio(file);wavIn=conformWav(makeWav(src.channels,src.sampleRate,BD),SR,BD);wav=await enhanceWav(wavIn,AM)}
- wav=conformWav(wav,SR,BD);
- let rateOut=0;
- {const hd=new DataView(wav);rateOut=hd.getUint32(24,true);outBits=hd.getUint16(34,true)}
+ const src=await loadAudio(input,processRate);
+ if(cancel)throw Error('cancelled');
+ if(!src.channels[0].length||!src.sampleRate)throw Error('The audio is empty or has an invalid sample rate.');
+ log(`Audio-only working format: ${processRate} Hz, ${processBits}-bit float.`);
+ stat('Preparing audio at 192 kHz, 32-bit float...');
+ let channels=await resampleAudioOnly(src.channels,src.sampleRate,processRate);
+ let wav=null;
+ if(improve){
+  wav=await enhanceWav(makeWav(channels,processRate,processBits),AM);
+  channels=null;
+ }
+ if(cancel)throw Error('cancelled');
+ if(!wav||rateOut!==processRate||outBits!==processBits){
+  if(wav){channels=parseWav(wav).channels;wav=null}
+  if(rateOut!==processRate){
+   stat(`Converting to ${rateOut/1000} kHz for export...`);
+   channels=await resampleAudioOnly(channels,processRate,rateOut);
+  }
+  wav=makeWav(channels,rateOut,outBits);
+ }
+ if(cancel)throw Error('cancelled');
  stat('Writing WAV...');
- const name=file.name.replace(/\.[^.]+$/,'')+'_chromawave.wav';
+ const name=input.name.replace(/\.[^.]+$/,'')+'_chromawave.wav';
  const url=URL.createObjectURL(new Blob([wav],{type:'audio/wav'})),hash=await sha256(wav);
  stat(`Done in ${((performance.now()-t0)/1000).toFixed(1)}s · ${rateOut} Hz · ${outBits}-bit · ${(wav.byteLength/1048576).toFixed(1)} MB`);
  $('fill').style.width='100%';log('Finished.');
@@ -1664,5 +1696,445 @@ async function run(){
  $('res').innerHTML=`<p>${wallRate>=1?'PASS — 1× end-to-end target met':'FAIL — below 1× end-to-end target'}: ${wallRate.toFixed(2)}× (${wallSeconds.toFixed(2)}s total / ${mediaSeconds.toFixed(2)}s media).</p><p>${note}</p><video src="${url}" controls></video>`;
  }finally{if(referenceBank)referenceBank.destroy();if(gpuVectors)gpuVectors.destroy();if(gpuPreviewUrl)URL.revokeObjectURL(gpuPreviewUrl);if(colorOverlay)colorOverlay.destroy();if(guide)guide.destroy();dev.destroy();}
 }
+
+</script><script data-pplx-inline-edit>
+(function () {
+  if (window === window.top) return;
+
+  const allowedParentOrigins = ["https://www.perplexity.ai","https://perplexity.ai","https://testing.perplexity.ai","https://staging.perplexity.ai","https://*.preview.i.perplexity.ai","http://perplexity.localhost","http://localhost:1420","http://127.0.0.1:1420","http://localhost:3000","http://127.0.0.1:3000","http://localhost:5173","http://127.0.0.1:5173"];
+  const MAX_FONT_BYTES = 500 * 1024;
+  const MAX_TOTAL_FONT_BYTES = 2 * 1024 * 1024;
+  const DEFAULT_LINE_HEIGHT = 16;
+  let scrollForwarding = false;
+  let scrollRaf = 0;
+  let trustedTopOrigin = null;
+
+  // Allow entries like "https://*.preview.i.perplexity.ai" — the wildcard
+  // matches a single DNS label (no dots), so "https://*.foo" cannot stretch
+  // across multiple labels.
+  function matchesAllowedOrigin(origin) {
+    if (!origin) return false;
+    for (const entry of allowedParentOrigins) {
+      if (!entry.includes("*")) {
+        if (entry === origin) return true;
+        continue;
+      }
+      const pattern = new RegExp(
+        "^" +
+          entry.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, "[^.]+") +
+          "$",
+      );
+      if (pattern.test(origin)) return true;
+    }
+    return false;
+  }
+
+  // Trust decision: when the sender is same-origin-visible (event.origin is a
+  // real origin like https://www.perplexity.ai) we trust event.origin directly.
+  // When event.origin is "null" (opaque broker srcdoc), we fall back to the
+  // broker's stamped `parentOrigin` to identify the top window. The fallback
+  // is claim-only — we rely on the browser's native `targetOrigin` enforcement
+  // on the response path (see postToTrustedTop) to ensure replies can't be
+  // delivered to anyone but the actual top window of that claimed origin.
+  function getTrustedParentOrigin(event) {
+    const forwardedParentOrigin =
+      typeof event.data.parentOrigin === "string" ? event.data.parentOrigin : null;
+    const parentOrigin = event.origin === "null" ? forwardedParentOrigin : event.origin;
+    return matchesAllowedOrigin(parentOrigin) ? parentOrigin : null;
+  }
+
+  // All responses go to window.top with targetOrigin = the allowlisted origin.
+  // An attacker that iframes us inside their own null-origin broker can claim
+  // any parentOrigin they like, but the browser will drop the reply whenever
+  // the real top's origin doesn't match — so the screenshot never leaves.
+  function postToTrustedTop(message) {
+    if (!trustedTopOrigin) return;
+    try {
+      window.top.postMessage(message, trustedTopOrigin);
+    } catch (_error) {}
+  }
+
+  const PICK_CAPABILITIES = ["pick"];
+  const PICK_CHAIN_LENGTH = 4;
+  const PICK_MAX_TEXT_CHARS = 120;
+  const PICK_MAX_HTML_CHARS = 300;
+
+  function truncate(value, maxChars) {
+    return value.length > maxChars ? value.slice(0, maxChars - 1) + "…" : value;
+  }
+
+  function isPickableElement(element) {
+    return (
+      element instanceof Element &&
+      element !== document.documentElement &&
+      element !== document.body
+    );
+  }
+
+  function resolvePickTarget(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const element = document.elementFromPoint(x, y);
+    return isPickableElement(element) ? element.closest("svg") || element : null;
+  }
+
+  function pickLabel(element) {
+    if (element.id) return element.localName + "#" + element.id;
+    return [element.localName].concat(Array.from(element.classList).slice(0, 2)).join(".");
+  }
+
+  // Only attributes that help find the element in source. data-* values and URL
+  // query strings or fragments can carry tokens.
+  const PICK_ATTRIBUTES = new Set([
+    "id",
+    "class",
+    "name",
+    "type",
+    "role",
+    "alt",
+    "aria-label",
+    "href",
+    "src",
+  ]);
+
+  function pickAttributeValue(attribute) {
+    return attribute.name === "href" || attribute.name === "src"
+      ? attribute.value.split(/[?#]/)[0]
+      : attribute.value;
+  }
+
+  function describePickElement(element) {
+    const chain = [];
+    for (
+      let current = element;
+      isPickableElement(current) && chain.length < PICK_CHAIN_LENGTH;
+      current = current.parentElement
+    ) {
+      chain.unshift(current);
+    }
+    const attributes = Array.from(element.attributes)
+      .filter((attribute) => PICK_ATTRIBUTES.has(attribute.name))
+      .map((attribute) => ` ${attribute.name}="${pickAttributeValue(attribute).replace(/"/g, "&quot;")}"`)
+      .join("");
+    const text = (element.innerText || element.textContent || "").replace(/\s+/g, " ").trim();
+    return {
+      chain: chain.map(pickLabel),
+      html: truncate(`<${element.localName}${attributes}>`, PICK_MAX_HTML_CHARS),
+      text: text ? truncate(text, PICK_MAX_TEXT_CHARS) : undefined,
+    };
+  }
+
+  // Hover asks once per frame, and innerText on a large section forces layout,
+  // so only the rect is re-read while the pointer stays on the same element.
+  // Clicks ask for fresh details since the page may have changed the element.
+  let lastPick = null;
+
+  function describePickTarget(element, fresh) {
+    if (fresh || lastPick?.element !== element) {
+      lastPick = { element, details: describePickElement(element) };
+    }
+    const rect = element.getBoundingClientRect();
+    return {
+      rect: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
+      ...lastPick.details,
+    };
+  }
+
+  function inlineAll(original, clone) {
+    if (original.nodeType !== 1 || clone.nodeType !== 1) return;
+
+    try {
+      const computedStyle = getComputedStyle(original);
+      // cssText on a computed style is the serialized declaration in modern
+      // Chromium/Safari — a single read beats enumerating ~400 longhand
+      // properties. Firefox returns "" here, so we fall back on empty.
+      const serialized = computedStyle.cssText;
+      if (serialized) {
+        clone.style.cssText = serialized;
+      } else {
+        const parts = new Array(computedStyle.length);
+        for (let index = 0; index < computedStyle.length; index += 1) {
+          const property = computedStyle[index];
+          parts[index] = `${property}:${computedStyle.getPropertyValue(property)};`;
+        }
+        clone.style.cssText = parts.join("");
+      }
+    } catch (_error) {}
+
+    const originalChildren = original.children;
+    const clonedChildren = clone.children;
+    for (
+      let index = 0;
+      index < originalChildren.length && index < clonedChildren.length;
+      index += 1
+    ) {
+      inlineAll(originalChildren[index], clonedChildren[index]);
+    }
+  }
+
+  function extractFontUrl(srcValue) {
+    const matches = [
+      ...srcValue.matchAll(
+        /url\(["']?([^"')]+)["']?\)(?:\s*format\(["']?([^"')]+)["']?\))?/gi,
+      ),
+    ];
+    if (matches.length === 0) return null;
+    const woff2 = matches.find((m) => m[2] && m[2].toLowerCase().includes("woff2"));
+    if (woff2) return woff2[1];
+    const woff = matches.find((m) => m[2] && m[2].toLowerCase().includes("woff"));
+    if (woff) return woff[1];
+    return matches[0][1];
+  }
+
+  // Cache resolved font URL -> data URI across captures. Fonts on a page
+  // essentially never change, and a batch run emits multiple captures back to
+  // back — without this we'd refetch + re-base64 every time.
+  const fontDataUriCache = new Map();
+  const SRC_DECLARATION_RE = /src\s*:\s*[^;}]+/i;
+
+  async function fetchAsDataUri(url) {
+    if (fontDataUriCache.has(url)) return fontDataUriCache.get(url);
+    let dataUri = null;
+    try {
+      const response = await fetch(url, { mode: "cors", credentials: "omit" });
+      if (response.ok) {
+        const blob = await response.blob();
+        if (blob.size <= MAX_FONT_BYTES) {
+          dataUri = await new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () =>
+              resolve(typeof reader.result === "string" ? reader.result : null);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          });
+        }
+      }
+    } catch (_error) {
+      dataUri = null;
+    }
+    fontDataUriCache.set(url, dataUri);
+    return dataUri;
+  }
+
+  function collectFontFaceRuleTexts() {
+    const rules = [];
+    for (const sheet of document.styleSheets) {
+      let cssRules;
+      try {
+        cssRules = sheet.cssRules;
+      } catch (_error) {
+        continue;
+      }
+      if (!cssRules) continue;
+      for (const rule of cssRules) {
+        const cssText = rule.cssText || "";
+        if (cssText.startsWith("@font-face")) rules.push(cssText);
+      }
+    }
+    return rules;
+  }
+
+  async function buildInlinedFontCss() {
+    const ruleTexts = collectFontFaceRuleTexts();
+    if (ruleTexts.length === 0) return null;
+
+    const resolved = ruleTexts.map((cssText) => {
+      if (!SRC_DECLARATION_RE.test(cssText)) return null;
+      const srcMatch = cssText.match(/src\s*:\s*([^;}]+)[;}]/i);
+      if (!srcMatch) return null;
+      const url = extractFontUrl(srcMatch[1]);
+      if (!url) return null;
+      try {
+        return { cssText, url: new URL(url, document.baseURI).href };
+      } catch (_error) {
+        return null;
+      }
+    });
+
+    const dataUris = await Promise.all(
+      resolved.map((entry) => (entry ? fetchAsDataUri(entry.url) : Promise.resolve(null))),
+    );
+
+    const inlined = [];
+    let totalBytes = 0;
+    for (let index = 0; index < resolved.length; index += 1) {
+      const entry = resolved[index];
+      const dataUri = dataUris[index];
+      if (!entry || !dataUri) continue;
+      const approxBytes = dataUri.length * 0.75;
+      if (totalBytes + approxBytes > MAX_TOTAL_FONT_BYTES) break;
+      totalBytes += approxBytes;
+      inlined.push(entry.cssText.replace(SRC_DECLARATION_RE, `src: url("${dataUri}")`));
+    }
+    return inlined.length > 0 ? inlined.join("\n") : null;
+  }
+
+  function stripExternal(clone) {
+    const images = clone.querySelectorAll("img");
+    for (let index = 0; index < images.length; index += 1) {
+      const src = images[index].getAttribute("src");
+      if (src && !src.startsWith("data:")) images[index].removeAttribute("src");
+    }
+
+    const elements = clone.querySelectorAll("*");
+    for (let index = 0; index < elements.length; index += 1) {
+      const style = elements[index].style.cssText;
+      if (style && style.includes("url(")) {
+        elements[index].style.cssText = style.replace(
+          /url\(["']?(?!data:)[^)"']*["']?\)/gi,
+          "none",
+        );
+      }
+    }
+  }
+
+  function emitScroll() {
+    scrollRaf = 0;
+    if (!scrollForwarding) return;
+    postToTrustedTop({
+      type: "INLINE_EDIT_SCROLL",
+      scrollX: window.scrollX,
+      scrollY: window.scrollY,
+      capabilities: PICK_CAPABILITIES,
+    });
+  }
+
+  window.addEventListener(
+    "scroll",
+    function () {
+      if (!scrollForwarding || scrollRaf) return;
+      scrollRaf = requestAnimationFrame(emitScroll);
+    },
+    { passive: true, capture: true },
+  );
+
+  async function handleCaptureRequest(event) {
+    const requestId = event.data.requestId;
+    const scrollX = window.scrollX;
+    const scrollY = window.scrollY;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
+
+    function postResult(dataUrl) {
+      postToTrustedTop({
+        type: "INLINE_EDIT_SCREENSHOT_RESULT",
+        requestId,
+        dataUrl,
+        scrollX,
+        scrollY,
+      });
+    }
+
+    try {
+      // Wait for any pending web fonts to resolve so both inline metrics and
+      // the @font-face inlining below see the same loaded faces.
+      if (document.fonts && document.fonts.ready) {
+        try {
+          await document.fonts.ready;
+        } catch (_error) {}
+      }
+
+      const clone = document.documentElement.cloneNode(true);
+      inlineAll(document.documentElement, clone);
+
+      const removedNodes = clone.querySelectorAll("script,link[rel=\"stylesheet\"],style");
+      for (let index = 0; index < removedNodes.length; index += 1) {
+        removedNodes[index].remove();
+      }
+
+      stripExternal(clone);
+
+      // Re-embed web fonts as data-URI @font-face rules so the SVG rasterizer
+      // can resolve them — external font URLs aren't fetched during
+      // foreignObject rendering, which would otherwise force a fallback face
+      // and change text metrics.
+      const inlinedFontCss = await buildInlinedFontCss();
+      if (inlinedFontCss) {
+        const styleEl = document.createElement("style");
+        styleEl.textContent = inlinedFontCss;
+        const head = clone.querySelector("head");
+        if (head) head.appendChild(styleEl);
+        else clone.insertBefore(styleEl, clone.firstChild);
+      }
+
+      const html = new XMLSerializer().serializeToString(clone);
+      const svg =
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">` +
+        '<foreignObject width="100%" height="100%">' +
+        `<div xmlns="http://www.w3.org/1999/xhtml" style="width:${width}px;height:${height}px;overflow:hidden">` +
+        `<div style="position:relative;left:-${scrollX}px;top:-${scrollY}px">` +
+        html +
+        "</div></div></foreignObject></svg>";
+      const svgUrl = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+      const image = new Image();
+      image.onload = function () {
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d").drawImage(image, 0, 0);
+        postResult(canvas.toDataURL("image/png"));
+      };
+      image.onerror = function () {
+        postResult(null);
+      };
+      image.src = svgUrl;
+    } catch (_error) {
+      postResult(null);
+    }
+  }
+
+  window.addEventListener("message", function (event) {
+    if (!event.data) return;
+    // Only accept messages from the direct parent frame. Blocks sibling /
+    // unrelated-window postMessage senders that could otherwise reach us.
+    if (event.source !== window.parent) return;
+
+    const trustedParentOrigin = getTrustedParentOrigin(event);
+    if (!trustedParentOrigin) return;
+    trustedTopOrigin = trustedParentOrigin;
+
+    if (event.data.type === "INLINE_EDIT_PICK") {
+      const element = resolvePickTarget(event.data.x, event.data.y);
+      postToTrustedTop({
+        type: "INLINE_EDIT_PICK_RESULT",
+        seq: event.data.seq,
+        target: element ? describePickTarget(element, event.data.fresh === true) : null,
+      });
+      return;
+    }
+
+    if (event.data.type === "INLINE_EDIT_SCROLL_START") {
+      scrollForwarding = true;
+      emitScroll();
+      return;
+    }
+
+    if (event.data.type === "INLINE_EDIT_SCROLL_STOP") {
+      scrollForwarding = false;
+      if (scrollRaf) cancelAnimationFrame(scrollRaf);
+      scrollRaf = 0;
+      return;
+    }
+
+    if (event.data.type === "INLINE_EDIT_SCROLL_BY") {
+      const { deltaX, deltaY, deltaMode } = event.data;
+      if (!scrollForwarding || !Number.isFinite(deltaX) || !Number.isFinite(deltaY)) return;
+      if (deltaMode !== 0 && deltaMode !== 1 && deltaMode !== 2) return;
+      const lineHeight =
+        parseFloat(getComputedStyle(document.documentElement).lineHeight) || DEFAULT_LINE_HEIGHT;
+      const scaleX = deltaMode === 1 ? lineHeight : deltaMode === 2 ? window.innerWidth : 1;
+      const scaleY = deltaMode === 1 ? lineHeight : deltaMode === 2 ? window.innerHeight : 1;
+      // The selection overlay receives the wheel event instead of this iframe.
+      // Instant scrolling preserves trackpad deltas even on smooth-scroll sites.
+      window.scrollBy({ left: deltaX * scaleX, top: deltaY * scaleY, behavior: "instant" });
+      emitScroll();
+      return;
+    }
+
+    if (event.data.type !== "INLINE_EDIT_CAPTURE_REQUEST") return;
+
+    handleCaptureRequest(event);
+  });
+})();
+
 
 </script></body></html>

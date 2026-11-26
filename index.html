@@ -1447,6 +1447,7 @@ async function run(){
  let W,H,MW,MH,OW,OH,LW,LH,full=[],mid=[],outT,mfmt,rt,oc,ctx,cfmt,enc,muxer,vErr=null,pumpAudio=()=>{};
  dev.addEventListener('uncapturederror',e=>{vErr=Error('GPU rendering failed: '+e.error.message);log(vErr.message)});
  let slot=1,A=null,k=0,nOut=0,nIn=0,paired=-1,t0=performance.now(),lastPreview=0;
+ let BW=0,BH=0; // internal working size of the vector-detail bank (output size is never changed)
  const dtOut=1e6/F,kf=Math.max(1,Math.round(F*2));
  const pv=$('pv'),pc=pv.getContext('2d');pv.style.display=$('showpreview').checked?'block':'none';
 
@@ -1470,8 +1471,20 @@ async function run(){
    log(`Vector reconstruction ready: ${W}x${H} -> ${OW}x${OH}; 2 GPU passes/frame (structure tensor, edge-directed reconstruction). Work scales with output pixels only, not content.`);
   }
   if(vectorDetail){
-   const {createVectorDetailBank}=await import(MOD('vector-detail'));
-   referenceBank=await createVectorDetailBank(dev,{sr,width:W,height:H,outputWidth:OW,outputHeight:OH,interval:Number($('referenceInterval').value),sharp:Number($('vecSharp').value),fallback:$('detailFallback').value,isCancelled:()=>cancel,onLog:log,
+   const {createVectorDetailBank,estimateBankBytes}=await import(MOD('vector-detail'));
+   // Memory guard: output-size surfaces dominate (e.g. 4K -> 8K needs ~855 MiB). Keep the requested OUTPUT size and
+   // instead run the internal analysis / WebSR keyframe stage at a reduced working size (largest one that fits).
+   // Fine detail still reaches the full-size output via the WebSR keyframe residual + motion-aligned fusion.
+   const ivl=Math.max(2,Math.min(24,Math.round(Number($('referenceInterval').value)||8))),LIM=768*1048576;
+   BW=W;BH=H;
+   if(estimateBankBytes(W,H,OW,OH,ivl)>LIM){
+    for(const sc of [0.75,2/3,0.5,0.375,0.25]){
+     BW=Math.max(2,Math.round(W*sc/2)*2);BH=Math.max(2,Math.round(H*sc/2)*2);
+     if(estimateBankBytes(BW,BH,OW,OH,ivl)<=LIM)break;
+    }
+    log(`Large input: ${W}x${H} source -> ${OW}x${OH} output exceeds the ${768} MiB bank budget at full source size. Internal vector/WebSR working size set to ${BW}x${BH}; output stays ${OW}x${OH}.`);
+   }
+   referenceBank=await createVectorDetailBank(dev,{sr,width:BW,height:BH,outputWidth:OW,outputHeight:OH,interval:Number($('referenceInterval').value),sharp:Number($('vecSharp').value),fallback:$('detailFallback').value,isCancelled:()=>cancel,onLog:log,
     emit:async(frame,tex)=>{referencePrepared=tex;try{await emit(frame.timestamp,frame.source,frame.source,1,0,W,H,frame.duration);}finally{referencePrepared=null;}}
    });
   }
@@ -1623,7 +1636,11 @@ async function run(){
   if(!enc)await init(vf);
   const ts=vf.timestamp-base,frameDuration=vf.duration||dtOut;
   if(referenceVideo||vectorDetail){
-   try{await referenceBank.push({input:vf,timestamp:ts,duration:frameDuration});nIn++;}finally{vf.close();}
+   let inp=vf;
+   try{
+    if(vectorDetail&&(BW!==W||BH!==H))inp=await createImageBitmap(vf,{resizeWidth:BW,resizeHeight:BH,resizeQuality:'high'});
+    await referenceBank.push({input:inp,timestamp:ts,duration:frameDuration});nIn++;
+   }finally{if(inp!==vf)inp.close();vf.close();}
   }else if(SOURCEFPS){
    try{await emit(ts,vf,vf,1,0,W,H,frameDuration);nIn++;}finally{vf.close();}
   }else{
@@ -1658,20 +1675,21 @@ async function run(){
  /* decode -> process */
  stat('Processing…');t0=performance.now();
  const q=[];let done=false,decErr=null;
- const dec=new VideoDecoder({output:f=>q.push(f),error:e=>{decErr=e}});dec.configure(dcfg);
+ let decClosed=false;const dec=new VideoDecoder({output:f=>{if(decClosed)f.close();else q.push(f)},error:e=>{decErr=e}});dec.configure(dcfg);
  const feeder=(async()=>{
   for(const s of v){
    if(cancel||decErr||vErr)break;
    while((dec.decodeQueueSize>8||q.length>5)&&!cancel&&!decErr)await sleep(1);
+   if(cancel||decErr||vErr||decClosed||dec.state==='closed')break;
    dec.decode(new EncodedVideoChunk({type:s.is_sync?'key':'delta',timestamp:Math.round(T(s)),duration:Math.round(s.duration*1e6/s.timescale),data:s.data}));}
-  if(!cancel&&!decErr)await dec.flush();done=true})();
+  if(!cancel&&!decErr&&!decClosed&&dec.state!=='closed')await dec.flush();done=true})().catch(e=>{if(!decClosed&&!cancel)decErr=decErr||e;done=true});
  try{
   while(!(done&&!q.length)){
    if(cancel||decErr||vErr)break;
    if(!q.length){await sleep(0);continue}
    await onFrame(q.shift());
   }
- }catch(e){cancel=true;throw e}finally{for(const f of q)f.close();try{dec.close()}catch{}}
+ }catch(e){cancel=true;throw e}finally{decClosed=true;for(const f of q)f.close();q.length=0;try{dec.close()}catch{}}
  await feeder.catch(()=>{});
  if(decErr)throw decErr;if(vErr)throw vErr;
  if(cancel){try{enc&&enc.close()}catch{}if(sink)await sink.abort().catch(()=>{});stat('Cancelled.');log('Cancelled.');return}

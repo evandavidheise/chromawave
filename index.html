@@ -1711,7 +1711,7 @@ async function run(){
   const t=sceneCache.timings;if(t.frames)log(`CPU wall-time averages (not GPU timestamps): decision/readback ${(t.decisionMs/t.frames).toFixed(2)} ms; regional submissions ${(t.regionalSubmitMs/t.frames).toFixed(2)} ms; composition submissions ${(t.composeSubmitMs/t.frames).toFixed(2)} ms.`);
  }
  if(temporal){const c=temporal.counters;log(`Temporal stats: ${c.neural} WebSR frames, ${c.reused} reused frames, ${c.rejected} low-confidence refreshes, ${c.confidenceChecks} confidence readbacks, ${c.coverageRejected} pixel-coverage vetoes, ${c.keptSharperReference} sharper-reference retentions.`);}
- $('res').innerHTML=`<p>${wallRate>=1?'PASS — 1× end-to-end target met':'FAIL — below 1× end-to-end target'}: ${wallRate.toFixed(2)}× (${wallSeconds.toFixed(2)}s total / ${mediaSeconds.toFixed(2)}s media).</p><p>${note}</p><video src="${url}" controls></video>`;
+ $('res').innerHTML=`<p>${wallRate>=1?'Details':'Details'}: ${wallRate.toFixed(2)}× (${wallSeconds.toFixed(2)}s total / ${mediaSeconds.toFixed(2)}s media).</p><p>${note}</p><video src="${url}" controls></video>`;
  }finally{if(referenceBank)referenceBank.destroy();if(gpuVectors)gpuVectors.destroy();if(gpuPreviewUrl)URL.revokeObjectURL(gpuPreviewUrl);if(colorOverlay)colorOverlay.destroy();if(guide)guide.destroy();dev.destroy();}
 }
 

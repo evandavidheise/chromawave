@@ -1097,12 +1097,16 @@ async function buildEnhancedAudio(mp,info,a,base){
  const rateOut=44100,bitsOut=16;
  log(`Video audio is forced lossless: processed like audio-only mode, stored as uncompressed PCM at ${rateOut} Hz, ${bitsOut}-bit.`);
  const hi=src.sampleRate===SR?src.channels:await resampleAudioOnly(src.channels,src.sampleRate,SR);
- const p1=parseWav(await enhanceWav(makeWav(hi,SR,BD),{prof:false,repan:false}));
- if(cancel)throw Error('cancelled');
- const mid=p1.sampleRate===rateOut?p1.channels:await resampleAudioOnly(p1.channels,p1.sampleRate,rateOut);
+ const lo=SR===rateOut?hi:await resampleAudioOnly(hi,SR,rateOut);
  log(`Mask and repan step: ${rateOut} Hz, ${bitsOut}-bit PCM.`);
- const p2=parseWav(await enhanceWav(makeWav(mid,rateOut,bitsOut),{prof:true,repan:true}));
- const out={ch:p2.channels,rate:p2.sampleRate};
+ const p1=parseWav(await enhanceWav(makeWav(lo,rateOut,bitsOut),{prof:true,repan:true}));
+ if(cancel)throw Error('cancelled');
+ const up=p1.sampleRate===SR?p1.channels:await resampleAudioOnly(p1.channels,p1.sampleRate,SR);
+ log(`Natural step: ${SR} Hz, ${BD}-bit float.`);
+ const p2=parseWav(await enhanceWav(makeWav(up,SR,BD),{prof:false,repan:false}));
+ if(cancel)throw Error('cancelled');
+ const fin=p2.sampleRate===rateOut?p2.channels:await resampleAudioOnly(p2.channels,p2.sampleRate,rateOut);
+ const out={ch:fin,rate:rateOut};
  if(out.rate!==rateOut)throw Error('Internal rate mismatch after audio processing');
  stat('Packing audio...');
  const e=encodePcm16(out.ch,out.rate);
@@ -1192,13 +1196,18 @@ async function runAudio(){
  let channels=await resampleAudioOnly(src.channels,src.sampleRate,processRate);
  let wav=null,improved=false;
  if(improve){
-  const p1=parseWav(await enhanceWav(makeWav(channels,processRate,processBits),{prof:false,repan:false}));
-  channels=p1.channels;
-  if(cancel)throw Error('cancelled');
   if(rateOut!==processRate){stat(`Converting to ${rateOut/1000} kHz for mask and repan...`);channels=await resampleAudioOnly(channels,processRate,rateOut)}
   log(`Mask and repan step: ${rateOut} Hz, ${outBits}-bit${outBits===32?' float':' PCM'}.`);
-  const p2=parseWav(await enhanceWav(makeWav(channels,rateOut,outBits),{prof:true,repan:true}));
-  wav=makeWav(p2.channels,rateOut,outBits);
+  const p1=parseWav(await enhanceWav(makeWav(channels,rateOut,outBits),{prof:true,repan:true}));
+  channels=p1.channels;
+  if(cancel)throw Error('cancelled');
+  if(p1.sampleRate!==processRate){stat('Converting to 192 kHz for the natural step...');channels=await resampleAudioOnly(channels,p1.sampleRate,processRate)}
+  log('Natural step: 192000 Hz, 32-bit float.');
+  const p2=parseWav(await enhanceWav(makeWav(channels,processRate,processBits),{prof:false,repan:false}));
+  channels=p2.channels;
+  if(cancel)throw Error('cancelled');
+  if(rateOut!==processRate){stat(`Converting to ${rateOut/1000} kHz for export...`);channels=await resampleAudioOnly(channels,processRate,rateOut)}
+  wav=makeWav(channels,rateOut,outBits);
   channels=null;improved=true;
  }
  if(cancel)throw Error('cancelled');
